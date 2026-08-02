@@ -62,6 +62,28 @@ pipeline {
                 }
             }
         }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: 'mall-kubeconfig',
+                        variable: 'KUBECONFIG_FILE'
+                    )
+                ]) {
+                    bat '''
+                        @echo off
+                        kubectl --kubeconfig "%KUBECONFIG_FILE%" set image deployment/product-service product-service=%PRODUCT_IMAGE%:%IMAGE_TAG% -n mall
+                        kubectl --kubeconfig "%KUBECONFIG_FILE%" set image deployment/order-service order-service=%ORDER_IMAGE%:%IMAGE_TAG% -n mall
+                        kubectl --kubeconfig "%KUBECONFIG_FILE%" set image deployment/api-gateway api-gateway=%GATEWAY_IMAGE%:%IMAGE_TAG% -n mall
+
+                        kubectl --kubeconfig "%KUBECONFIG_FILE%" rollout status deployment/product-service -n mall --timeout=180s
+                        kubectl --kubeconfig "%KUBECONFIG_FILE%" rollout status deployment/order-service -n mall --timeout=180s
+                        kubectl --kubeconfig "%KUBECONFIG_FILE%" rollout status deployment/api-gateway -n mall --timeout=180s
+                    '''
+                }
+            }
+        }
     }
 
     post {
