@@ -84,6 +84,43 @@ pipeline {
                 }
             }
         }
+
+        stage('Gateway Smoke Test') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: 'mall-kubeconfig',
+                        variable: 'KUBECONFIG_FILE'
+                    )
+                ]) {
+                    powershell '''
+                        $ErrorActionPreference = "Stop"
+                        $env:KUBECONFIG = $env:KUBECONFIG_FILE
+
+                        $portForward = Start-Process `
+                            -FilePath "kubectl" `
+                            -ArgumentList @(
+                                "port-forward", "service/api-gateway",
+                                "18080:8080", "-n", "mall"
+                            ) `
+                            -WindowStyle Hidden `
+                            -PassThru
+
+                        try {
+                            $env:GATEWAY_URL = "http://localhost:18080"
+                            & ".\\system-tests\\successful-order-gateway.ps1"
+
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "Gateway smoke test failed with exit code $LASTEXITCODE."
+                            }
+                        }
+                        finally {
+                            Stop-Process -Id $portForward.Id -Force -ErrorAction SilentlyContinue
+                        }
+                    '''
+                }
+            }
+        }
     }
 
     post {
