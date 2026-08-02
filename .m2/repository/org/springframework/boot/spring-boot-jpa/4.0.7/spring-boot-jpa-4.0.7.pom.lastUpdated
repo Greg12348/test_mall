@@ -1,0 +1,5 @@
+#NOTE: This is a Maven Resolver internal implementation file, its format can be changed without prior notice.
+#Sun Jun 28 13:03:46 CDT 2026
+@default-aliyun-https\://maven.aliyun.com/repository/public/.lastUpdated=1782669597341
+https\://maven.aliyun.com/repository/public/.error=Could not transfer artifact org.springframework.boot\:spring-boot-jpa\:pom\:4.0.7 from/to aliyun (https\://maven.aliyun.com/repository/public)\: status code\: 502, reason phrase\: Bad Gateway (502)
+https\://repo.maven.apache.org/maven2/.lastUpdated=1782669826037

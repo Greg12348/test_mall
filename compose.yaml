@@ -1,0 +1,116 @@
+services:
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    ports:
+      - "9092:9092"
+
+  product-mysql:
+    image: mysql:8.4
+    container_name: product-mysql
+    environment:
+      MYSQL_DATABASE: mall_product
+      MYSQL_USER: mall
+      MYSQL_PASSWORD: mall
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    volumes:
+      - product-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  order-mysql:
+    image: mysql:8.4
+    container_name: order-mysql
+    environment:
+      MYSQL_DATABASE: mall_order
+      MYSQL_USER: mall
+      MYSQL_PASSWORD: mall
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3307:3306"
+    volumes:
+      - order-mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  product-service:
+    build:
+      context: .
+      dockerfile: product-service/Dockerfile
+    container_name: product-service
+    environment:
+      PRODUCT_DB_URL: jdbc:mysql://product-mysql:3306/mall_product
+      PRODUCT_DB_USERNAME: mall
+      PRODUCT_DB_PASSWORD: mall
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8082:8082"
+    depends_on:
+      product-mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    restart: unless-stopped
+
+  order-service:
+    build:
+      context: .
+      dockerfile: order-service/Dockerfile
+    container_name: order-service
+    environment:
+      ORDER_DB_URL: jdbc:mysql://order-mysql:3306/mall_order
+      ORDER_DB_USERNAME: mall
+      ORDER_DB_PASSWORD: mall
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SERVICES_PRODUCT_URL: http://product-service:8082
+    ports:
+      - "8084:8084"
+    depends_on:
+      order-mysql:
+        condition: service_healthy
+      product-service:
+        condition: service_started
+      kafka:
+        condition: service_started
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: api-gateway
+    environment:
+      PRODUCT_SERVICE_URL: http://product-service:8082
+      ORDER_SERVICE_URL: http://order-service:8084
+    ports:
+      - "8080:8080"
+    depends_on:
+      product-service:
+        condition: service_started
+      order-service:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  product-mysql-data:
+  order-mysql-data:
