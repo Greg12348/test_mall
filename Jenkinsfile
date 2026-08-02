@@ -41,6 +41,27 @@ pipeline {
                 '''
             }
         }
+
+        stage('Push Docker Images') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USERNAME',
+                        passwordVariable: 'DOCKER_TOKEN'
+                    )
+                ]) {
+                    bat '''
+                        @echo off
+                        echo %DOCKER_TOKEN% | docker login --username %DOCKER_USERNAME% --password-stdin
+                        docker push %PRODUCT_IMAGE%:%IMAGE_TAG%
+                        docker push %ORDER_IMAGE%:%IMAGE_TAG%
+                        docker push %GATEWAY_IMAGE%:%IMAGE_TAG%
+                        docker logout
+                    '''
+                }
+            }
+        }
     }
 
     post {
