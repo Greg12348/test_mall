@@ -5,6 +5,21 @@ Last updated: 2026-08-03 (America/Chicago)
 This document records completed work, decisions, commands, and current state. Debugging and
 error-resolution history is intentionally omitted.
 
+## 2026-08-03: AWS learning environment retired
+
+After the AWS learning exercise was completed, all Mall cloud resources were permanently
+removed to stop ongoing charges:
+
+- Public ALB and Kubernetes Ingress
+- `mall` namespace, workloads, databases, Kafka, PVCs, and EBS data volumes
+- EKS cluster `mall-test`, managed node group, add-ons, OIDC provider, and VPC stack
+- All three Mall ECR repositories and their images
+- AWS Load Balancer Controller IAM policy, role, and service account
+- Dedicated `mall-migration-admin` IAM user and access key
+
+The AWS manifests and scripts remain in Git as reproducible learning artifacts. URLs and
+resource descriptions below document the completed exercise and are no longer active.
+
 ## 2026-07-31: Local Kubernetes and automated tests
 
 The Mall project was migrated from Docker Compose to Docker Desktop Kubernetes. The `mall`
