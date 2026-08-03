@@ -1,184 +1,253 @@
 # Codex project progress
 
-Last updated: 2026-07-31 (America/Chicago)
+Last updated: 2026-08-03 (America/Chicago)
 
-## Current objective
+This document records completed work, decisions, commands, and current state. Debugging and
+error-resolution history is intentionally omitted.
 
-Build a CI/CD pipeline for the Mall microservices after completing the Docker Compose to
-Kubernetes migration and adding automated tests.
+## 2026-07-31: Local Kubernetes and automated tests
 
-## Kubernetes migration status
+The Mall project was migrated from Docker Compose to Docker Desktop Kubernetes. The `mall`
+namespace contains Product MySQL, Order MySQL, Kafka, Product Service, Order Service, and API
+Gateway. MySQL and Kafka use persistent volumes.
 
-The local Docker Desktop Kubernetes cluster uses the Kind provisioner with:
+Automated test coverage was completed for:
 
-- 1 control-plane node: `desktop-control-plane`
-- 2 worker nodes: `desktop-worker`, `desktop-worker2`
-- Namespace: `mall`
+- 52 unit and web-slice tests
+- 11 component integration tests using Testcontainers and MySQL 8.4
+- Product and Order repository behavior
+- Stock reservation and event handling
+- Transactional outbox behavior
+- API Gateway route forwarding
+- Complete successful-order system flow
 
-Deployed workloads:
-
-- `product-mysql` StatefulSet with a 2 GiB persistent volume
-- `order-mysql` StatefulSet with a 2 GiB persistent volume
-- `kafka` single-node KRaft StatefulSet with a 2 GiB persistent volume
-- `product-service` Deployment with 3 replicas
-- `order-service` Deployment with 1 replica
-- `api-gateway` Deployment with 1 replica
-
-Application images are published on Docker Hub:
-
-- `greg12348/mall-product-service:latest`
-- `greg12348/mall-order-service:latest`
-- `greg12348/mall-api-gateway:latest`
-
-Kubernetes manifests are stored in `kubernetes/`.
-
-### Kafka startup fix
-
-Kafka originally failed because `kafka-0.kafka` was not resolvable before the pod became
-ready. The Kafka headless Service now has:
-
-```yaml
-publishNotReadyAddresses: true
-```
-
-This allows KRaft controller/broker communication during startup.
-
-### Verified Kubernetes features
-
-- Self-healing: deleted a Product Service pod and Kubernetes created a healthy replacement.
-- Scaling: Product Service scaled from 1 to 3 replicas across both workers.
-- Service load balancing: Product Service has three ready endpoints; 20/20 Service requests
-  succeeded.
-- Rolling update: simulated `v1` to `v2` using a pod-template annotation with 3/3 available.
-- Rollback: returned to `v1` with 3/3 available and a healthy Gateway route.
-- Persistence: inserted marker `docker-restart-20260731-01`, restarted Docker Desktop, and
-  confirmed the row remained in Product MySQL.
-
-The Product Service rolling strategy is:
-
-```yaml
-maxUnavailable: 0
-maxSurge: 1
-```
-
-### Local Gateway access
-
-Run and keep open:
-
-```powershell
-kubectl port-forward service/api-gateway 8080:8080 -n mall
-```
-
-Then use `http://localhost:8080`.
-
-## Automated test status
-
-### Unit and web-slice tests
-
-There are 52 passing unit/web-slice tests across Product and Order Services.
-
-Coverage includes:
-
-- Product controller and business operations
-- Stock availability, increase, decrease, and insufficient stock
-- Order controller, creation, price calculation, and lookup
-- Product-client failure behavior
-- Order-created and stock-result consumer validation
-- Duplicate event handling and conflicting transitions
-- Product and Order outbox creation
-- Outbox claim, successful publish, failed publish, and retry marking
-
-Explicitly unfinished methods in `OrderServiceImpl` that return placeholder `null` or empty
-values are not treated as correct behavior and are not tested.
-
-### Component integration tests
-
-There are 11 passing component integration tests in 7 `*IT` classes:
-
-- Product repository with real MySQL 8.4
-- Atomic Product stock reservation
-- Product outbox repository state transitions
-- Order-created consumer transaction and duplicate handling
-- Order repository with real MySQL 8.4
-- Order outbox repository state transitions
-- Stock-result consumer transaction and duplicate handling
-- API Gateway Product and Order routing with prefix stripping
-
-Test locations:
-
-```text
-product-service/src/test/java/com/libo/mall/product/integration/
-order-service/src/test/java/com/libo/mall/order/integration/
-api-gateway/src/test/java/com/libo/mall/gateway/integration/
-```
-
-Maven Failsafe is configured in the root `pom.xml` to run `*IT` tests during `verify`.
-Testcontainers 2.0.5 starts disposable MySQL 8.4 containers. Docker Desktop must be running,
-but the Mall application does not need to be started.
-
-Verified totals:
-
-```text
-Unit and web-slice tests:     52
-Component integration tests: 11
-Total passing tests:         63
-Failures:                     0
-Errors:                       0
-```
-
-Run fast tests:
+Run the fast tests:
 
 ```powershell
 mvn -pl product-service,order-service,api-gateway test
 ```
 
-Run unit plus component integration tests:
+Run unit and component tests:
 
 ```powershell
 mvn -pl product-service,order-service,api-gateway verify
 ```
 
-### Existing deployed-system tests
-
-- `system-tests/successful-order.ps1`: calls Product and Order Services directly.
-- `system-tests/successful-order-gateway.ps1`: runs the complete order flow through Gateway.
-- `system-tests/successful-order-docker.ps1`: validates Compose and wraps the Gateway test.
-
-With the Kubernetes port-forward active, run:
+Run the Gateway system test when a Gateway endpoint is available:
 
 ```powershell
+$env:GATEWAY_URL = "http://localhost:8080"
 .\system-tests\successful-order-gateway.ps1
 ```
 
-## Important decisions
+## 2026-08-01: Jenkins CI/CD
 
-- Kubernetes runs OCI/container images; it does not build Java source directly.
-- Application images are delivered through Docker Hub so every worker can pull them.
-- MySQL Services can both use port 3306 because they have different Kubernetes DNS names.
-- Kafka uses a headless Service (`clusterIP: None`) for stable broker identity.
-- Internal service addresses are:
-  - `product-mysql:3306`
-  - `order-mysql:3306`
-  - `kafka:9092`
-  - `product-service:8082`
-  - `order-service:8084`
-  - `api-gateway:8080`
-- Database PVCs survive pod and Docker Desktop restarts, but local cluster deletion/reset can
-  still destroy data. External database backups are required for cluster-loss protection.
+Jenkins was installed locally and configured for the GitHub repository:
 
-## Next step
+```text
+https://github.com/Greg12348/test_mall.git
+```
 
-Add CI/CD and Kubernetes smoke-test automation. A recommended pipeline order is:
+The pipeline tests the services, builds versioned images, pushes images, deploys Kubernetes
+workloads, waits for rollouts, and runs the successful-order Gateway test.
 
-1. Compile and run unit/web-slice tests.
-2. Run Testcontainers component integration tests.
-3. Build versioned application images.
-4. Push images to a registry.
-5. Validate Kubernetes manifests.
-6. Deploy to a test namespace.
-7. Wait for Kubernetes rollouts.
-8. Run the successful-order Gateway system test.
-9. Promote or roll back based on the result.
+Jenkins credential identifiers:
 
-Before choosing the CI implementation, decide which platform to use, such as GitHub Actions,
-Jenkins, or GitLab CI.
+- `dockerhub-credential`: Docker Hub username/token
+- `mall-kubeconfig`: original local Kubernetes kubeconfig
+- `aws-mall-credentials`: AWS access-key ID and secret access key
+
+No credential values are stored in Git.
+
+Docker Desktop must be running while local Jenkins builds container images. Docker Desktop is
+not required for workloads that are already running in AWS.
+
+GitHub polling schedule:
+
+```text
+H/5 * * * *
+```
+
+This asks Jenkins to check for repository changes approximately every five minutes, with a
+Jenkins-selected offset.
+
+## 2026-08-02: AWS foundation
+
+AWS deployment configuration:
+
+- AWS account: `753974169033`
+- Region: `us-east-1`
+- AWS CLI profile: `mall-aws`
+- EKS cluster: `mall-test`
+- Kubernetes version: 1.34
+- Managed node group: `mall-workers`
+- Current learning node size: one `t3.large`
+- Default EBS StorageClass: encrypted `gp3`
+- EBS CSI managed add-on enabled
+
+ECR repositories:
+
+```text
+753974169033.dkr.ecr.us-east-1.amazonaws.com/mall-product-service
+753974169033.dkr.ecr.us-east-1.amazonaws.com/mall-order-service
+753974169033.dkr.ecr.us-east-1.amazonaws.com/mall-api-gateway
+```
+
+The initial AWS application image tag was `aws-test-1`. Jenkins now publishes immutable tags
+in the form:
+
+```text
+BUILD_NUMBER-GIT_COMMIT
+```
+
+AWS infrastructure and deployment files are stored under `aws/`. The Kubernetes base is under
+`kubernetes/`, and the AWS-specific Kustomize overlay is under `aws/kubernetes/`.
+
+## 2026-08-03: AWS application and data migration
+
+The following workloads are running in the EKS `mall` namespace:
+
+- Product Service
+- Order Service
+- API Gateway
+- Product MySQL
+- Order MySQL
+- Single-node Kafka for the learning environment
+
+Persistent storage:
+
+- Product MySQL: encrypted 2 GiB `gp3` EBS volume
+- Order MySQL: encrypted 2 GiB `gp3` EBS volume
+- Kafka: encrypted 2 GiB `gp3` EBS volume
+
+The AWS overlay uses resource requests and limits sized for the current single learning node.
+Product Service is limited to one replica in this environment.
+
+### Database migration tooling
+
+Database tools are stored under `database-migration/`:
+
+- `migrate-databases.ps1`: configuration-driven MySQL export/import utility
+- `migration-config.example.json`: Product and Order mapping example
+- `sample-product-dump.sql`: synthetic, repeatable Product database sample
+
+Real database dumps, backups, passwords, and local migration configuration are excluded from
+Git.
+
+The synthetic database migration inserted and verified:
+
+```text
+ID:          10001
+Name:        Migrated AWS Demo Product
+Price:       149.99
+Stock:       25
+```
+
+### AWS validation
+
+Run the consolidated validation script:
+
+```powershell
+.\aws\validate-migration.ps1
+```
+
+It verifies:
+
+- Correct EKS context
+- Deployment and StatefulSet rollouts
+- Bound `gp3` persistent volume claims
+- ECR application images
+- Migrated Product record in AWS MySQL
+- Gateway access to the migrated Product
+- Complete successful-order workflow through Kafka
+
+Latest validation result:
+
+```text
+AWS MIGRATION VALIDATION: SUCCESS
+```
+
+The verified order test created Product `10002`, created Order `1`, reached
+`STOCK_RESERVED`, and reduced stock from 10 to 8.
+
+## 2026-08-03: AWS Jenkins deployment
+
+The Jenkins pipeline now performs:
+
+```text
+GitHub checkout
+-> Maven verification
+-> Docker image builds
+-> ECR pushes
+-> EKS manifest deployment
+-> Kubernetes rollout verification
+-> Gateway successful-order test
+```
+
+Relevant commits:
+
+- `8d50216`: AWS EKS migration configuration and validation
+- `78b0b83`: Jenkins deployment to AWS ECR and EKS
+- `6093e02`: API Gateway exposure through AWS ALB
+
+## 2026-08-03: Public AWS Application Load Balancer
+
+The official AWS Load Balancer Controller is installed in `kube-system` with two ready
+replicas. It uses an IRSA service account and a dedicated IAM policy.
+
+One internet-facing ALB routes public HTTP traffic to API Gateway. Product Service, Order
+Service, MySQL, and Kafka remain internal.
+
+Public endpoint:
+
+```text
+http://k8s-mall-apigatew-524487532f-169527717.us-east-1.elb.amazonaws.com
+```
+
+Verified public request:
+
+```text
+GET /api/products/10001
+```
+
+The endpoint returned the migrated Product successfully and `/actuator/health` returned `UP`.
+
+The current public endpoint uses HTTP and does not have application authentication. It is for
+learning use only and must not contain sensitive data. The ALB, EKS control plane, EC2 node,
+and EBS volumes continue generating AWS charges while they exist.
+
+## Current architecture
+
+```text
+Internet
+   -> AWS Application Load Balancer
+   -> Spring API Gateway on EKS
+      -> Product Service -> Product MySQL on EKS/EBS
+      -> Order Service   -> Order MySQL on EKS/EBS
+      -> Kafka on EKS/EBS
+```
+
+## Production roadmap
+
+The learning deployment is functionally complete. A production-oriented upgrade should be
+implemented in this order:
+
+1. Authentication and authorization
+2. HTTPS using AWS Certificate Manager
+3. RDS MySQL with Multi-AZ and automated backups
+4. At least two EKS worker nodes across Availability Zones
+5. Multiple application replicas, disruption budgets, and topology spreading
+6. AWS Secrets Manager integration
+7. CloudWatch logs, metrics, dashboards, and alarms
+8. S3 for product images and object storage
+9. MSK only when Kafka compatibility, replay, ordering, or multiple consumers are required
+10. Infrastructure as code and separate development, staging, and production environments
+
+For a small production workload that does not require Kafka semantics, SQS, SNS, or EventBridge
+may be simpler and less expensive than MSK.
+
+## Cost and cleanup reminder
+
+The current test environment is billable. When learning work is finished, remove resources in
+dependency order: public Ingress/ALB, application workloads and PVCs, node group, EKS cluster,
+and controller IAM resources. Retain only ECR images or backups that are intentionally needed.
