@@ -8,17 +8,23 @@ pipeline {
     }
 
     environment {
-        DOCKER_NAMESPACE = 'greg12348'
-        PRODUCT_IMAGE = "${DOCKER_NAMESPACE}/mall-product-service"
-        ORDER_IMAGE = "${DOCKER_NAMESPACE}/mall-order-service"
-        GATEWAY_IMAGE = "${DOCKER_NAMESPACE}/mall-api-gateway"
-        IMAGE_TAG = "${BUILD_NUMBER}"
+        AWS_REGION = 'us-east-1'
+        AWS_ACCOUNT_ID = '753974169033'
+        EKS_CLUSTER = 'mall-test'
+        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        PRODUCT_IMAGE = "${ECR_REGISTRY}/mall-product-service"
+        ORDER_IMAGE = "${ECR_REGISTRY}/mall-order-service"
+        GATEWAY_IMAGE = "${ECR_REGISTRY}/mall-api-gateway"
+        KUBECONFIG = "${WORKSPACE}\\.kube\\config"
     }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
+                script {
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(7)}"
+                }
             }
         }
 
@@ -31,7 +37,7 @@ pipeline {
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Build ECR Images') {
             steps {
                 bat '''
                     @echo off
@@ -42,60 +48,79 @@ pipeline {
             }
         }
 
-        stage('Push Docker Images') {
+        stage('Push ECR Images') {
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'dockerhub-credential',
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_TOKEN'
+                        credentialsId: 'aws-mall-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
                     )
                 ]) {
                     bat '''
                         @echo off
-                        echo %DOCKER_TOKEN% | docker login --username %DOCKER_USERNAME% --password-stdin
+                        cmd /c "aws ecr get-login-password --region %AWS_REGION% | docker login --username AWS --password-stdin %ECR_REGISTRY%"
                         docker push %PRODUCT_IMAGE%:%IMAGE_TAG%
                         docker push %ORDER_IMAGE%:%IMAGE_TAG%
                         docker push %GATEWAY_IMAGE%:%IMAGE_TAG%
-                        docker logout
+                        docker logout %ECR_REGISTRY%
                     '''
                 }
             }
         }
 
-        stage('Deploy to Kubernetes') {
+        stage('Deploy to EKS') {
             steps {
                 withCredentials([
-                    file(
-                        credentialsId: 'mall-kubeconfig',
-                        variable: 'KUBECONFIG_FILE'
-                    )
-                ]) {
-                    bat '''
-                        @echo off
-                        kubectl --kubeconfig "%KUBECONFIG_FILE%" set image deployment/product-service product-service=%PRODUCT_IMAGE%:%IMAGE_TAG% -n mall
-                        kubectl --kubeconfig "%KUBECONFIG_FILE%" set image deployment/order-service order-service=%ORDER_IMAGE%:%IMAGE_TAG% -n mall
-                        kubectl --kubeconfig "%KUBECONFIG_FILE%" set image deployment/api-gateway api-gateway=%GATEWAY_IMAGE%:%IMAGE_TAG% -n mall
-
-                        kubectl --kubeconfig "%KUBECONFIG_FILE%" rollout status deployment/product-service -n mall --timeout=180s
-                        kubectl --kubeconfig "%KUBECONFIG_FILE%" rollout status deployment/order-service -n mall --timeout=180s
-                        kubectl --kubeconfig "%KUBECONFIG_FILE%" rollout status deployment/api-gateway -n mall --timeout=180s
-                    '''
-                }
-            }
-        }
-
-        stage('Gateway Smoke Test') {
-            steps {
-                withCredentials([
-                    file(
-                        credentialsId: 'mall-kubeconfig',
-                        variable: 'KUBECONFIG_FILE'
+                    usernamePassword(
+                        credentialsId: 'aws-mall-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
                     )
                 ]) {
                     powershell '''
                         $ErrorActionPreference = "Stop"
-                        $env:KUBECONFIG = $env:KUBECONFIG_FILE
+
+                        New-Item -ItemType Directory -Path (Split-Path $env:KUBECONFIG) -Force | Out-Null
+                        aws eks update-kubeconfig `
+                            --name $env:EKS_CLUSTER `
+                            --region $env:AWS_REGION `
+                            --kubeconfig $env:KUBECONFIG
+
+                        $kustomizationPath = ".\\aws\\kubernetes\\kustomization.yaml"
+                        $kustomization = Get-Content $kustomizationPath -Raw
+                        $kustomization = $kustomization -replace 'newTag: aws-test-1', "newTag: $env:IMAGE_TAG"
+                        Set-Content -Path $kustomizationPath -Value $kustomization -Encoding utf8
+
+                        kubectl apply -k .\\aws\\kubernetes
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "EKS manifest deployment failed."
+                        }
+
+                        foreach ($deployment in @("product-service", "order-service", "api-gateway")) {
+                            kubectl rollout status "deployment/$deployment" -n mall --timeout=300s
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "Rollout failed for $deployment."
+                            }
+                        }
+                    '''
+                }
+            }
+        }
+
+        stage('AWS Gateway System Test') {
+            steps {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-mall-credentials',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
+                    powershell '''
+                        $ErrorActionPreference = "Stop"
+                        $stdoutPath = Join-Path $env:TEMP "mall-jenkins-port-forward-$env:BUILD_NUMBER.out.log"
+                        $stderrPath = Join-Path $env:TEMP "mall-jenkins-port-forward-$env:BUILD_NUMBER.err.log"
 
                         $portForward = Start-Process `
                             -FilePath "kubectl" `
@@ -104,18 +129,27 @@ pipeline {
                                 "18080:8080", "-n", "mall"
                             ) `
                             -WindowStyle Hidden `
+                            -RedirectStandardOutput $stdoutPath `
+                            -RedirectStandardError $stderrPath `
                             -PassThru
 
                         try {
-                            $env:GATEWAY_URL = "http://localhost:18080"
-                            & ".\\system-tests\\successful-order-gateway.ps1"
+                            $env:GATEWAY_URL = "http://127.0.0.1:18080"
+                            $powerShellPath = (Get-Process -Id $PID).Path
+                            & $powerShellPath `
+                                -NoProfile `
+                                -ExecutionPolicy Bypass `
+                                -File ".\\system-tests\\successful-order-gateway.ps1"
 
                             if ($LASTEXITCODE -ne 0) {
-                                throw "Gateway smoke test failed with exit code $LASTEXITCODE."
+                                throw "AWS Gateway system test failed with exit code $LASTEXITCODE."
                             }
                         }
                         finally {
-                            Stop-Process -Id $portForward.Id -Force -ErrorAction SilentlyContinue
+                            if (-not $portForward.HasExited) {
+                                Stop-Process -Id $portForward.Id -Force -ErrorAction SilentlyContinue
+                                $portForward.WaitForExit()
+                            }
                         }
                     '''
                 }
