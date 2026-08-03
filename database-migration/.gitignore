@@ -1,0 +1,4 @@
+backups/
+migration-config.json
+*.sql
+!sample-product-dump.sql

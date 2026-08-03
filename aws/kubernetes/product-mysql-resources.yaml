@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: product-mysql
+  namespace: mall
+spec:
+  template:
+    spec:
+      containers:
+        - name: mysql
+          args:
+            - --innodb-buffer-pool-size=256M
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi

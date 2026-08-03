@@ -1,0 +1,32 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: mall-test
+  region: us-east-1
+  version: "1.34"
+
+iam:
+  withOIDC: true
+
+vpc:
+  nat:
+    gateway: Disable
+  clusterEndpoints:
+    publicAccess: true
+    privateAccess: false
+
+managedNodeGroups:
+  - name: mall-workers
+    instanceType: t3.large
+    desiredCapacity: 1
+    minSize: 1
+    maxSize: 1
+    volumeSize: 20
+    volumeType: gp3
+    privateNetworking: false
+
+addons:
+  - name: aws-ebs-csi-driver
+    wellKnownPolicies:
+      ebsCSIController: true

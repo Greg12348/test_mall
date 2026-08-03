@@ -1,0 +1,32 @@
+{
+  "databases": [
+    {
+      "source": {
+        "host": "127.0.0.1",
+        "port": 3306,
+        "user": "root",
+        "passwordEnvironmentVariable": "MALL_PRODUCT_SOURCE_PASSWORD",
+        "database": "mall_product"
+      },
+      "target": {
+        "namespace": "mall",
+        "pod": "product-mysql-0",
+        "database": "mall_product"
+      }
+    },
+    {
+      "source": {
+        "host": "127.0.0.1",
+        "port": 3307,
+        "user": "root",
+        "passwordEnvironmentVariable": "MALL_ORDER_SOURCE_PASSWORD",
+        "database": "mall_order"
+      },
+      "target": {
+        "namespace": "mall",
+        "pod": "order-mysql-0",
+        "database": "mall_order"
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: mall
+spec:
+  template:
+    spec:
+      containers:
+        - name: kafka
+          env:
+            - name: KAFKA_HEAP_OPTS
+              value: -Xms256m -Xmx512m
+            - name: KAFKA_LOG_DIRS
+              value: /var/lib/kafka/data/kafka
+          resources:
+            requests:
+              cpu: 200m
+              memory: 768Mi
+            limits:
+              cpu: "1"
+              memory: 1280Mi
